@@ -1,0 +1,5 @@
+{
+  "name": "Manga & Novel Translator",
+  "description": "A tool to translate manga pages and novel text into your preferred language using AI.",
+  "requestFramePermissions": []
+}
