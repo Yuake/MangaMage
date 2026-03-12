@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { Upload, Image as ImageIcon, Type, Copy, Check, Languages, Waves, Sparkles, PenTool } from 'lucide-react';
+import { Upload, Image as ImageIcon, Type, Copy, Check, Languages, Waves, Sparkles, PenTool, FileImage, Folder, X, Archive, Download } from 'lucide-react';
 import Markdown from 'react-markdown';
 import { cn } from './lib/utils';
 
@@ -24,6 +24,9 @@ const i18n = {
     uploadTitle: 'Drop your artwork here',
     uploadDesc: 'Drag & drop a manga page or click to browse.',
     changeImage: 'Change Image',
+    modeFile: 'Upload Images',
+    modeDir: 'Upload Directory',
+    uploadHintFile: 'Up to 9 images. For more, use Upload Directory.',
     pasteText: 'Paste your raw text here...',
     translateBtn: 'Translate',
     translating: 'Translating...',
@@ -42,6 +45,9 @@ const i18n = {
     uploadTitle: '将作品拖拽至此',
     uploadDesc: '拖拽漫画页面到此处，或者点击上传。',
     changeImage: '更换图片',
+    modeFile: '上传图片',
+    modeDir: '上传目录',
+    uploadHintFile: '最多上传9张图片，如需超额请使用上传目录',
     pasteText: '在这里粘贴你的纯文本...',
     translateBtn: '立即翻译',
     translating: '翻译中...',
@@ -57,32 +63,83 @@ export default function App() {
   const t = i18n[uiLang];
 
   const [activeTab, setActiveTab] = useState<'image' | 'text'>('image');
+  const [uploadMode, setUploadMode] = useState<'file' | 'directory'>('file');
   const [targetLanguage, setTargetLanguage] = useState(TARGET_LANGUAGES[0].value);
 
-  const [sourceImage, setSourceImage] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [sourceImages, setSourceImages] = useState<File[]>([]);
+  const [imagePreviews, setImagePreviews] = useState<string[]>([]);
 
   const [sourceText, setSourceText] = useState('');
 
   const [translatedText, setTranslatedText] = useState('');
-  const [translatedImage, setTranslatedImage] = useState<string | null>(null);
+  const [translatedImages, setTranslatedImages] = useState<string[]>([]);
+  const [zipBlobUrl, setZipBlobUrl] = useState<string | null>(null);
+  
   const [isTranslating, setIsTranslating] = useState(false);
+  const [translationProgress, setTranslationProgress] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  const handleModeChange = (mode: 'file' | 'directory') => {
+    setUploadMode(mode);
+    setSourceImages([]);
+    setImagePreviews([]);
+    setTranslatedText('');
+    setTranslatedImages([]);
+    setZipBlobUrl(null);
+    setError(null);
+  };
+
+  const clearImages = () => {
+    setSourceImages([]);
+    setImagePreviews([]);
+    setTranslatedText('');
+    setTranslatedImages([]);
+    setZipBlobUrl(null);
+    setError(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const removeImage = (indexToRemove: number) => {
+    setSourceImages(prev => prev.filter((_, i) => i !== indexToRemove));
+    setImagePreviews(prev => prev.filter((_, i) => i !== indexToRemove));
+    if (sourceImages.length <= 1) {
+      clearImages();
+    }
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setSourceImage(file);
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImagePreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+    const files = Array.from(e.target.files || []);
+    const imageFiles = uploadMode === 'directory' ? files.filter(f => f.type.startsWith('image/')) : files.filter(f => f.type.startsWith('image/')).slice(0, 9);
+    if (imageFiles.length > 0) {
+      setSourceImages(imageFiles);
+      
+      if (uploadMode === 'file') {
+        const newPreviews: string[] = [];
+        let loaded = 0;
+        
+        imageFiles.forEach((file, index) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            newPreviews[index] = reader.result as string;
+            loaded++;
+            if (loaded === imageFiles.length) {
+              setImagePreviews([...newPreviews]);
+            }
+          };
+          reader.readAsDataURL(file);
+        });
+      } else {
+        setImagePreviews([]);
+      }
+      
       setTranslatedText('');
-      setTranslatedImage(null);
+      setTranslatedImages([]);
+      setZipBlobUrl(null);
       setError(null);
     }
   };
@@ -95,16 +152,33 @@ export default function App() {
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    const file = e.dataTransfer.files?.[0];
-    if (file && file.type.startsWith('image/')) {
-      setSourceImage(file);
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImagePreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+    const files = Array.from(e.dataTransfer.files || []);
+    const imageFiles = uploadMode === 'directory' ? files.filter(f => f.type.startsWith('image/')) : files.filter(f => f.type.startsWith('image/')).slice(0, 9);
+    if (imageFiles.length > 0) {
+      setSourceImages(imageFiles);
+      
+      if (uploadMode === 'file') {
+        const newPreviews: string[] = [];
+        let loaded = 0;
+        
+        imageFiles.forEach((file, index) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            newPreviews[index] = reader.result as string;
+            loaded++;
+            if (loaded === imageFiles.length) {
+              setImagePreviews([...newPreviews]);
+            }
+          };
+          reader.readAsDataURL(file);
+        });
+      } else {
+        setImagePreviews([]);
+      }
+      
       setTranslatedText('');
-      setTranslatedImage(null);
+      setTranslatedImages([]);
+      setZipBlobUrl(null);
       setError(null);
     }
   };
@@ -122,7 +196,7 @@ export default function App() {
   };
 
   const translate = async () => {
-    if (activeTab === 'image' && !sourceImage) {
+    if (activeTab === 'image' && sourceImages.length === 0) {
       setError(t.errorImage);
       return;
     }
@@ -132,30 +206,73 @@ export default function App() {
     }
 
     setIsTranslating(true);
+    setTranslationProgress(0);
     setError(null);
     setTranslatedText('');
-    setTranslatedImage(null);
+    setTranslatedImages([]);
+    setZipBlobUrl(null);
 
     try {
-      if (activeTab === 'image' && sourceImage && imagePreview) {
-        const formData = new FormData();
-        formData.append('image', sourceImage);
-        formData.append('target_language', targetLanguage);
+      if (activeTab === 'image' && sourceImages.length > 0 && (imagePreviews.length > 0 || uploadMode === 'directory')) {
+        if (uploadMode === 'file') {
+          // Send separate requests for each image
+          let completed = 0;
+          const promises = sourceImages.map(async (img) => {
+            const formData = new FormData();
+            formData.append('image', img);
+            formData.append('target_language', targetLanguage);
+            const response = await fetch('http://localhost:8000/api/translate/image', {
+              method: 'POST',
+              body: formData,
+            });
+            if (!response.ok) {
+              const errData = await response.json().catch(() => ({}));
+              throw new Error(errData.detail || `Server error: ${response.status}`);
+            }
+            completed++;
+            setTranslationProgress((completed / sourceImages.length) * 100);
+            return response.json();
+          });
+          
+          const results = await Promise.all(promises);
+          const newTranslatedImages = results.map(r => r.translatedImageBase64 ? `data:image/jpeg;base64,${r.translatedImageBase64}` : null).filter(Boolean) as string[];
+          
+          setTranslatedImages(newTranslatedImages);
+          if (newTranslatedImages.length === 1 && results[0].translatedText) {
+             setTranslatedText(results[0].translatedText);
+          } else {
+             setTranslatedText(`Successfully translated ${newTranslatedImages.length} images.`);
+          }
+          
+        } else {
+          // Directory mode: send to zip endpoint
+          const interval = setInterval(() => {
+            setTranslationProgress(p => p < 90 ? p + 5 : p);
+          }, 1000);
 
-        const response = await fetch('http://localhost:8000/api/translate/image', {
-          method: 'POST',
-          body: formData,
-        });
+          const formData = new FormData();
+          formData.append('target_language', targetLanguage);
+          sourceImages.forEach(file => {
+            formData.append('images', file);
+          });
+          const response = await fetch('http://localhost:8000/api/translate/images-zip', {
+            method: 'POST',
+            body: formData,
+          });
 
-        if (!response.ok) {
-          const errData = await response.json().catch(() => ({}));
-          throw new Error(errData.detail || `Server error: ${response.status}`);
+          clearInterval(interval);
+          setTranslationProgress(100);
+
+          if (!response.ok) {
+            const errData = await response.json().catch(() => ({}));
+            throw new Error(errData.detail || `Server error: ${response.status}`);
+          }
+          
+          const blob = await response.blob();
+          const url = window.URL.createObjectURL(blob);
+          setZipBlobUrl(url);
+          setTranslatedText(`Successfully generated ZIP file with ${sourceImages.length} translated images.`);
         }
-        const data = await response.json();
-        if (data.translatedImageBase64) {
-          setTranslatedImage(`data:image/jpeg;base64,${data.translatedImageBase64}`);
-        }
-        setTranslatedText(data.translatedText || 'No translation generated.');
       } else if (activeTab === 'text') {
         const response = await fetch('http://localhost:8000/api/translate/text', {
           method: 'POST',
@@ -278,45 +395,122 @@ export default function App() {
                   onDragOver={handleDragOver}
                   onDrop={handleDrop}
                 >
-                  {imagePreview ? (
-                    <div className="relative flex-1 flex items-center justify-center group rounded-2xl overflow-hidden bg-slate-50 border border-slate-100">
-                      <img
-                        src={imagePreview}
-                        alt="Source"
-                        className="max-h-[400px] object-contain"
-                        referrerPolicy="no-referrer"
-                      />
-                      <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-sm">
+                  <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
+                    <div className="flex bg-slate-100/50 p-1 rounded-xl mb-6 border border-slate-200 w-[260px] relative z-20">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleModeChange('file'); }}
+                        className={cn("flex-1 flex items-center justify-center gap-2 px-2 py-2 text-sm font-bold rounded-lg transition-all", uploadMode === 'file' ? "bg-white text-purple-600 shadow-sm" : "text-slate-500 hover:text-slate-700")}
+                      >
+                        <FileImage className="w-4 h-4 shrink-0" />
+                        <span className="truncate">{t.modeFile}</span>
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleModeChange('directory'); }}
+                        className={cn("flex-1 flex items-center justify-center gap-2 px-2 py-2 text-sm font-bold rounded-lg transition-all", uploadMode === 'directory' ? "bg-white text-purple-600 shadow-sm" : "text-slate-500 hover:text-slate-700")}
+                      >
+                        <Folder className="w-4 h-4 shrink-0" />
+                        <span className="truncate">{t.modeDir}</span>
+                      </button>
+                    </div>
+
+                    {uploadMode === 'directory' && sourceImages.length > 0 ? (
+                      <div className="relative w-full flex-1 flex flex-col items-center justify-center group rounded-2xl bg-purple-50/50 border border-purple-200">
+                        <div className="w-24 h-24 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center mb-6 shadow-md shadow-purple-600/10">
+                          <Folder className="w-12 h-12" />
+                        </div>
+                        <h3 className="text-xl font-bold text-slate-700 mb-2">{sourceImages[0]?.webkitRelativePath.split('/')[0] || 'Selected Directory'}</h3>
+                        <p className="text-md font-medium text-purple-600 bg-purple-100 px-4 py-1.5 rounded-full">
+                          Contains {sourceImages.length} images
+                        </p>
                         <button
-                          onClick={() => fileInputRef.current?.click()}
-                          className="bg-white text-slate-800 px-6 py-2.5 rounded-full font-bold text-sm shadow-lg flex items-center gap-2 hover:scale-105 transition-transform"
+                          onClick={(e) => { e.stopPropagation(); clearImages(); }}
+                          className="absolute top-4 left-4 bg-white/90 text-slate-700 hover:text-red-500 hover:bg-red-50 p-2 rounded-full shadow-md transition-colors z-20"
+                          title="Clear selection"
                         >
-                          <Upload className="w-4 h-4" />
-                          {t.changeImage}
+                          <X className="w-5 h-5" />
                         </button>
                       </div>
-                    </div>
-                  ) : (
-                    <div
-                      className="flex-1 flex flex-col items-center justify-center p-8 text-center cursor-pointer border-2 border-dashed border-purple-300 bg-purple-50/50 rounded-2xl hover:bg-purple-100/50 transition-colors"
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      <div className="w-20 h-20 bg-white text-purple-600 rounded-full flex items-center justify-center mb-6 shadow-md shadow-purple-600/10 animate-float">
-                        <Upload className="w-8 h-8" />
+                    ) : uploadMode === 'file' && imagePreviews.length > 0 ? (
+                      <div className="relative w-full flex-1 flex flex-col group rounded-2xl overflow-hidden bg-slate-50 border border-slate-100 p-2">
+                        <div className={cn(
+                          "w-full h-full min-h-[300px] grid gap-2 place-items-center relative z-10",
+                          imagePreviews.length === 1 && "grid-cols-1 grid-rows-1",
+                          imagePreviews.length === 2 && "grid-cols-2 grid-rows-1",
+                          imagePreviews.length === 3 && "grid-cols-3 grid-rows-1",
+                          imagePreviews.length === 4 && "grid-cols-2 grid-rows-2",
+                          (imagePreviews.length === 5 || imagePreviews.length === 6) && "grid-cols-3 grid-rows-2",
+                          imagePreviews.length >= 7 && "grid-cols-3 grid-rows-3"
+                        )}>
+                          {imagePreviews.map((preview, idx) => (
+                            <div key={idx} className="w-full h-full relative flex items-center justify-center bg-white rounded-lg border border-slate-200 overflow-hidden shadow-sm aspect-[3/4] group/item">
+                              <img
+                                src={preview}
+                                alt={`Preview ${idx + 1}`}
+                                className="w-full h-full object-cover"
+                                referrerPolicy="no-referrer"
+                              />
+                              <button
+                                onClick={(e) => { e.stopPropagation(); removeImage(idx); }}
+                                className="absolute top-2 right-2 bg-slate-900/60 text-white hover:bg-red-500 hover:text-white p-1.5 rounded-full shadow-md transition-colors opacity-0 group-hover/item:opacity-100 z-30"
+                                title="Remove this image"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        {sourceImages.length > 1 && (
+                          <div className="absolute top-4 right-4 bg-purple-600/90 backdrop-blur-sm text-white font-bold px-3 py-1 rounded-full text-sm shadow-md z-20 pointer-events-none">
+                            {sourceImages.length} images
+                          </div>
+                        )}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); clearImages(); }}
+                          className="absolute top-4 left-4 bg-white/90 text-slate-700 hover:text-red-500 hover:bg-red-50 p-2 rounded-full shadow-md transition-colors z-20"
+                          title="Remove images"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
                       </div>
-                      <h3 className="text-xl font-bold text-slate-700 mb-2">{t.uploadTitle}</h3>
-                      <p className="text-sm font-medium text-slate-500 max-w-xs">
-                        {t.uploadDesc}
-                      </p>
-                    </div>
+                    ) : (
+                      <div
+                        className="w-full flex-1 flex flex-col items-center justify-center cursor-pointer border-2 border-dashed border-purple-300 bg-purple-50/50 rounded-2xl hover:bg-purple-100/50 transition-colors py-6"
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        <div className="w-16 h-16 bg-white text-purple-600 rounded-full flex items-center justify-center mb-4 shadow-md shadow-purple-600/10 animate-float">
+                          <Upload className="w-6 h-6" />
+                        </div>
+                        <h3 className="text-lg font-bold text-slate-700 mb-1">{t.uploadTitle}</h3>
+                        <p className="text-xs font-medium text-slate-500 max-w-xs mt-1">
+                          {uploadMode === 'file' ? t.uploadHintFile : t.uploadDesc}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
+                  {uploadMode === 'file' ? (
+                    <input
+                      key="file-input"
+                      type="file"
+                      ref={fileInputRef}
+                      onChange={handleImageUpload}
+                      accept="image/*"
+                      className="hidden"
+                      multiple
+                    />
+                  ) : (
+                    <input
+                      key="dir-input"
+                      type="file"
+                      ref={fileInputRef}
+                      onChange={handleImageUpload}
+                      accept="image/*"
+                      className="hidden"
+                      multiple
+                      // @ts-ignore
+                      webkitdirectory=""
+                    />
                   )}
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    onChange={handleImageUpload}
-                    accept="image/*"
-                    className="hidden"
-                  />
                 </div>
               ) : (
                 <div className="flex-1 flex flex-col p-4">
@@ -339,7 +533,7 @@ export default function App() {
               )}
               <button
                 onClick={translate}
-                disabled={isTranslating || (activeTab === 'image' && !sourceImage) || (activeTab === 'text' && !sourceText.trim())}
+                disabled={isTranslating || (activeTab === 'image' && sourceImages.length === 0) || (activeTab === 'text' && !sourceText.trim())}
                 className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-slate-200 disabled:text-slate-400 disabled:shadow-none disabled:cursor-not-allowed text-white py-4 rounded-full font-bold text-lg flex items-center justify-center gap-2 shadow-lg shadow-purple-600/30 hover:shadow-xl hover:shadow-purple-600/40 hover:-translate-y-0.5 transition-all"
               >
                 {isTranslating ? (
@@ -374,15 +568,54 @@ export default function App() {
               )}
             </div>
 
-            <div className="flex-1 p-8 overflow-y-auto">
+            <div className="flex-1 p-8 overflow-y-auto w-full">
               {isTranslating ? (
-                <div className="h-full flex flex-col items-center justify-center text-purple-600 space-y-4">
+                <div className="h-full flex flex-col items-center justify-center text-purple-600 space-y-4 px-8 w-full">
                   <PenTool className="w-10 h-10 animate-bounce" />
                   <p className="text-base font-bold">{t.translating}</p>
+                  <div className="w-full max-w-sm bg-purple-100 rounded-full h-2.5 mt-4 overflow-hidden shadow-inner">
+                    <div className="bg-purple-600 h-2.5 rounded-full transition-all duration-[400ms] shadow-sm" style={{ width: `${Math.min(100, Math.max(5, translationProgress))}%` }}></div>
+                  </div>
+                  <p className="text-sm font-bold text-purple-600">{Math.round(translationProgress)}%</p>
                 </div>
-              ) : translatedImage ? (
+              ) : zipBlobUrl ? (
                 <div className="h-full flex flex-col items-center justify-center p-4">
-                  <img src={translatedImage} alt="Translated" className="max-h-full object-contain rounded-xl shadow-md border border-slate-200" />
+                  <div className="w-24 h-24 bg-purple-100 rounded-full flex items-center justify-center mb-6 shadow-md shadow-purple-600/10">
+                    <Archive className="w-12 h-12 text-purple-600" />
+                  </div>
+                  <h4 className="text-xl font-bold text-slate-800 mb-2">Translation Complete</h4>
+                  <p className="text-slate-500 font-medium mb-8 text-center max-w-sm">{translatedText}</p>
+                  <a
+                    href={zipBlobUrl}
+                    download="translated_images.zip"
+                    className="bg-purple-600 hover:bg-purple-700 text-white px-8 py-3 rounded-full font-bold text-base flex items-center gap-2 shadow-lg shadow-purple-600/30 hover:-translate-y-0.5 transition-all"
+                  >
+                    <Download className="w-5 h-5" />
+                    Download ZIP
+                  </a>
+                </div>
+              ) : translatedImages.length > 0 ? (
+                <div className="h-full flex flex-col items-center justify-start p-4">
+                  <p className="text-sm font-semibold text-slate-500 mb-4">{translatedText}</p>
+                  <div className={cn(
+                    "w-full grid gap-4 relative z-10",
+                    translatedImages.length === 1 && "grid-cols-1 grid-rows-1 place-items-center h-full",
+                    translatedImages.length === 2 && "grid-cols-2 grid-rows-1",
+                    translatedImages.length === 3 && "grid-cols-3 grid-rows-1",
+                    translatedImages.length === 4 && "grid-cols-2 grid-rows-2",
+                    (translatedImages.length === 5 || translatedImages.length === 6) && "grid-cols-3 grid-rows-2",
+                    translatedImages.length >= 7 && "grid-cols-3 grid-rows-3"
+                  )}>
+                    {translatedImages.map((imgSrc, idx) => (
+                      <div key={idx} className="w-full relative flex items-center justify-center bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm aspect-[3/4]">
+                        <img
+                          src={imgSrc}
+                          alt={`Translated ${idx + 1}`}
+                          className="w-full h-full object-cover hover:object-contain transition-all duration-300"
+                        />
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ) : translatedText ? (
                 <div className="prose prose-slate max-w-none prose-p:leading-relaxed prose-headings:font-bold prose-a:text-purple-600 prose-strong:text-slate-800">
