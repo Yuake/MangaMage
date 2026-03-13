@@ -13,6 +13,7 @@ from google.genai import types
 from dotenv import load_dotenv
 from typing import List
 import zipfile
+import asyncio
 
 # Load environment variables from .env file (either in backend or parent directory)
 load_dotenv()
@@ -191,18 +192,14 @@ Return a STRICT JSON array of objects. Do not include markdown formatting or com
         
     return draw_translations_on_image(img_cv, data)
 
-def process_images_batch(contents_list: List[bytes], target_language: str, client, max_batch_size: int = 4) -> List[bytes]:
+async def process_single_batch(batch_index: int, batch_contents: List[bytes], target_language: str, client, sem: asyncio.Semaphore) -> tuple[int, List[bytes]]:
     import json
-    results = []
     
-    for i in range(0, len(contents_list), max_batch_size):
-        batch_contents = contents_list[i:i + max_batch_size]
+    async with sem:
         img_cv_list = []
         for contents in batch_contents:
             nparr = np.frombuffer(contents, np.uint8)
             img_cv = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            if img_cv is None:
-                raise ValueError("Invalid image file in batch.")
             img_cv_list.append(img_cv)
             
         num_images = len(batch_contents)
@@ -216,25 +213,35 @@ Each translation object must have exactly:
 - "text_translation": "the translated text"
 """
         parts = []
-        for contents in batch_contents:
+        for idx, contents in enumerate(batch_contents):
+            parts.append(f"Image {idx + 1}:")
             parts.append(types.Part.from_bytes(data=contents, mime_type="image/jpeg"))
         parts.append(prompt)
         
-        try:
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=parts
-            )
-            text_data = response.text
-            if "```json" in text_data:
-                text_data = text_data.split("```json")[1].split("```")[0]
-            elif "```" in text_data:
-                text_data = text_data.split("```")[1].split("```")[0]
-                
-            batch_data = json.loads(text_data)
-        except Exception as e:
-            print(f"Batch generation or JSON decode error: {e}")
-            batch_data = [[] for _ in range(num_images)]
+        # Retry logic for rate limits
+        max_retries = 3
+        batch_data = None
+        for attempt in range(max_retries):
+            try:
+                response = await client.aio.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=parts
+                )
+                text_data = response.text
+                if "```json" in text_data:
+                    text_data = text_data.split("```json")[1].split("```")[0]
+                elif "```" in text_data:
+                    text_data = text_data.split("```")[1].split("```")[0]
+                    
+                batch_data = json.loads(text_data)
+                break # Success
+            except Exception as e:
+                error_str = str(e).lower()
+                print(f"Batch generation error on attempt {attempt + 1}: {e}")
+                if "429" in error_str or "quota" in error_str:
+                    await asyncio.sleep(2 ** attempt + 2) # Exponential backoff
+                else:
+                    break # Don't retry for other errors
             
         if not isinstance(batch_data, list):
             batch_data = [[] for _ in range(num_images)]
@@ -242,22 +249,54 @@ Each translation object must have exactly:
         while len(batch_data) < num_images:
             batch_data.append([])
             
+        results = []
         for j in range(num_images):
             img_cv = img_cv_list[j]
             data = batch_data[j]
+            if img_cv is None:
+                print(f"Warning: Invalid image in batch {batch_index}, item {j}")
+                results.append(batch_contents[j])
+                continue
+                
             try:
-                res_bytes = draw_translations_on_image(img_cv, data)
+                # Use executor to avoid blocking the event loop on CPU-bound drawing
+                loop = asyncio.get_running_loop()
+                res_bytes = await loop.run_in_executor(None, draw_translations_on_image, img_cv, data)
                 results.append(res_bytes)
             except Exception as e:
-                print(f"Drawing error for image {i+j}: {e}")
-                # Fallback to original image bytes
+                print(f"Drawing error for image in batch {batch_index}, item {j}: {e}")
                 is_success, buffer = cv2.imencode(".jpg", img_cv)
                 if is_success:
                     results.append(buffer.tobytes())
                 else:
                     results.append(batch_contents[j])
                     
-    return results
+        return batch_index, results
+
+
+async def process_images_batch(contents_list: List[bytes], target_language: str, client, max_batch_size: int = 8) -> List[bytes]:
+    # Set Semaphore constraint. Since your peak RPM is 5, limiting to 2 concurrent API calls
+    # provides safety against hitting rate limits immediately.
+    sem = asyncio.Semaphore(2) 
+    
+    tasks = []
+    # Split into batches
+    for i, j in enumerate(range(0, len(contents_list), max_batch_size)):
+        batch_contents = contents_list[j:j + max_batch_size]
+        tasks.append(process_single_batch(i, batch_contents, target_language, client, sem))
+        
+    # Run all batches concurrently
+    batch_results = await asyncio.gather(*tasks)
+    
+    # Sort by batch index to assemble in original order
+    batch_results.sort(key=lambda x: x[0])
+    
+    # Flatten results
+    final_results = []
+    for _, res in batch_results:
+        final_results.extend(res)
+        
+    return final_results
 
 
 @app.post("/api/translate/image")
@@ -291,7 +330,7 @@ async def translate_images_zip(images: List[UploadFile], target_language: str = 
             filenames.append(upload_file.filename)
             
         # Process images in batches to reduce API requests and increase tokens per request
-        processed_bytes_list = process_images_batch(contents_list, target_language, client, max_batch_size=4)
+        processed_bytes_list = await process_images_batch(contents_list, target_language, client, max_batch_size=8)
         
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
             for i, result_bytes in enumerate(processed_bytes_list):
